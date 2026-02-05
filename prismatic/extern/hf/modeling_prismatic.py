@@ -504,8 +504,11 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         self.vocab_size = self.config.text_config.vocab_size - self.config.pad_to_multiple_of
 
     def predict_action(
-        self, input_ids: Optional[torch.LongTensor] = None, unnorm_key: Optional[str] = None, **kwargs: str
-    ) -> np.ndarray:
+        self, 
+        input_ids: Optional[torch.LongTensor] = None, 
+        unnorm_key: Optional[str] = None, 
+        **kwargs: str
+    ):
         """Thin wrapper around .generate() that decodes predicted actions and unnormalizes them."""
         # If the special empty token ('') does not already appear after the colon (':') token in the prompt
         # (after "OUT:" or "ASSISTANT:"), insert it to match the inputs seen at training time
@@ -514,11 +517,18 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
                 (input_ids, torch.unsqueeze(torch.Tensor([29871]).long(), dim=0).to(input_ids.device)), dim=1
             )
 
-        # Run VLA inference
-        generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
+            kwargs['attention_mask'] = torch.cat(
+                (kwargs['attention_mask'], kwargs['attention_mask'].new_ones(1, 1)), dim=1
+            )
+
+        # Run VLA inference using SAFE
+        generated_outputs = self.generate(input_ids, 
+                                          max_new_tokens=self.get_action_dim(unnorm_key),
+                                          **kwargs)
+        generated_ids = generated_outputs['sequences']
 
         # Extract predicted action tokens and translate into (normalized) continuous actions
-        predicted_action_token_ids = generated_ids[0, -self.get_action_dim(unnorm_key) :].cpu().numpy()
+        predicted_action_token_ids = generated_ids[:, -self.get_action_dim(unnorm_key) :].cpu().numpy()
         discretized_actions = self.vocab_size - predicted_action_token_ids
         discretized_actions = np.clip(discretized_actions - 1, a_min=0, a_max=self.bin_centers.shape[0] - 1)
         normalized_actions = self.bin_centers[discretized_actions]
@@ -527,13 +537,19 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         action_norm_stats = self.get_action_stats(unnorm_key)
         mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["q01"], dtype=bool))
         action_high, action_low = np.array(action_norm_stats["q99"]), np.array(action_norm_stats["q01"])
+
+        mask = np.asarray(mask)[None].repeat(normalized_actions.shape[0], axis=0)
+
         actions = np.where(
             mask,
             0.5 * (normalized_actions + 1) * (action_high - action_low) + action_low,
             normalized_actions,
         )
 
-        return actions
+        if actions.shape[0] == 1:
+            actions = actions[0]
+
+        return (actions, generated_outputs)
 
     @staticmethod
     def _check_unnorm_key(norm_stats: Dict[str, Dict[str, Any]], unnorm_key: Optional[str]) -> str:
