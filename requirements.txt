@@ -1,0 +1,18 @@
+timm==0.9.10
+tokenizers==0.19.1
+torch>=2.2.0
+torchvision>=0.16.0
+transformers==4.40.1
+tensorflow==2.15.0
+tensorflow_datasets==4.9.3
+tensorflow_graphics==2021.12.3
+draccus==0.8.0
+rich
+websockets
+msgpack
+accelerate
+tyro
+dlimp @ git+https://github.com/moojink/dlimp_openvla
+
+# Run this after uv sync
+# uv pip install flash-attn==2.5.5 --no-build-isolation -v

@@ -1,37 +1,38 @@
-import numpy as np
-import torch
 import asyncio
 import http
-import time
 import logging
+import time
 import traceback
+from typing import Any, Dict, Optional
+
+import numpy as np
+import torch
+import vla_scripts.msgpack_numpy as msgpack_numpy
 import websockets.asyncio.server as _server
 import websockets.frames
-
-from typing import Any, Dict, Optional, Union
-from dataclasses import dataclass
-from pathlib import Path
-
-from experiments.robot.openvla_utils import get_vla, get_processor
-from experiments.robot.robot_utils import get_action, get_model, normalize_gripper_action, invert_gripper_action
-
-import vla_scripts.msgpack_numpy as msgpack_numpy
+from experiments.robot.openvla_utils import get_processor
+from experiments.robot.robot_utils import (
+    get_action,
+    get_model,
+    invert_gripper_action,
+    normalize_gripper_action,
+)
 
 logger = logging.getLogger(__name__)
 
+
 class OpenVLAWrapper:
-    def __init__(self, cfg, attn_implementation: Optional[str] = "flash_attention_2") -> Path:
+    def __init__(
+        self, cfg, attn_implementation: Optional[str] = "flash_attention_2"
+    ):
         self.cfg, self.attn_implementation = cfg, attn_implementation
-        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
         self.processor = get_processor(self.cfg)
         self.model = get_model(self.cfg)
 
     def predict_action(self, payload: Dict[str, Any]):
-        instruction = payload["instruction"]
-        observation = {
-            "full_image": payload["image"]
-        }
+        instruction = payload["prompt"]
+        observation = {"full_image": payload["observation/image"]}
 
         actions = get_action(
             self.cfg,
@@ -39,7 +40,7 @@ class OpenVLAWrapper:
             observation,
             instruction,
             processor=self.processor,
-            n_samples=self.cfg.n_samples
+            n_samples=self.cfg.n_samples,
         )
 
         if type(actions) is tuple:
@@ -53,9 +54,13 @@ class OpenVLAWrapper:
             # Within which each element is a tuple of length 33 (number of layers)
             # Each element in the inner tuple is a tensor of shape (bs=1, 1 or N, 4096)
             # The final hidden states before decoding is generated_outputs['hidden_states'][0][-1][0, -1, :]
-            all_hidden_states = generated_outputs['hidden_states']
-            hidden_states_last_layer = [s[-1][0, -1, :] for s in all_hidden_states]
-            hidden_states_last_layer = torch.stack(hidden_states_last_layer, dim=0) # (7, 4096)
+            all_hidden_states = generated_outputs["hidden_states"]
+            hidden_states_last_layer = [
+                s[-1][0, -1, :] for s in all_hidden_states
+            ]
+            hidden_states_last_layer = torch.stack(
+                hidden_states_last_layer, dim=0
+            )  # (7, 4096)
 
         # last hidden state along token dimension used as embedding for SAFE
         # best for LSTM, MLP & PCA
@@ -69,20 +74,17 @@ class OpenVLAWrapper:
         else:
             embedding = np.asarray(embedding)
 
-        payload = {
-            "actions": actions,
-            "embedding": embedding
-        }
+        payload = {"actions": actions, "pre_logits": embedding}
 
         return payload
 
+
 class WebSocketOpenVLAServer:
-    def __init__(self,
-                 vla_wrapper,
-                 host: str = "0.0.0.0",
-                 port: int = 8000) -> None:
+    def __init__(
+        self, vla_wrapper, host: str = "0.0.0.0", port: int = 8000
+    ) -> None:
         self._vla = vla_wrapper
-        
+
         self._host = host
         self._port = port
 
@@ -90,7 +92,7 @@ class WebSocketOpenVLAServer:
 
     def serve_forever(self) -> None:
         asyncio.run(self.run())
-    
+
     async def run(self):
         async with _server.serve(
             self._handler,
@@ -106,17 +108,15 @@ class WebSocketOpenVLAServer:
         logger.info(f"Connection from {websocket.remote_address} opened")
         packer = msgpack_numpy.Packer()
 
-        metadata = {
-            "hello": "world"
-        }
+        metadata = {"hello": "world"}
 
         await websocket.send(packer.pack(metadata))
-        
+
         prev_total_time = None
         while True:
             try:
                 start_time = time.monotonic()
-                
+
                 # obs must be:
                 # {
                 #   instruction: str
@@ -128,7 +128,9 @@ class WebSocketOpenVLAServer:
                 action_payload = self._vla.predict_action(obs)
 
                 # patch to ensure data can be transmitted
-                action_payload["embedding"] = action_payload["embedding"].astype("float32")
+                action_payload["pre_logits"] = action_payload[
+                    "pre_logits"
+                ].astype("float32")
 
                 infer_time = time.monotonic() - infer_time
 
@@ -137,13 +139,17 @@ class WebSocketOpenVLAServer:
                 }
                 if prev_total_time is not None:
                     # We can only record the last total time since we also want to include the send time.
-                    action_payload["server_timing"]["prev_total_ms"] = prev_total_time * 1000
+                    action_payload["server_timing"]["prev_total_ms"] = (
+                        prev_total_time * 1000
+                    )
 
                 await websocket.send(packer.pack(action_payload))
                 prev_total_time = time.monotonic() - start_time
 
             except websockets.ConnectionClosed:
-                logger.info(f"Connection from {websocket.remote_address} closed")
+                logger.info(
+                    f"Connection from {websocket.remote_address} closed"
+                )
                 break
             except Exception:
                 await websocket.send(traceback.format_exc())
@@ -153,7 +159,10 @@ class WebSocketOpenVLAServer:
                 )
                 raise
 
-def _health_check(connection: _server.ServerConnection, request: _server.Request) -> _server.Response | None:
+
+def _health_check(
+    connection: _server.ServerConnection, request: _server.Request
+) -> _server.Response | None:
     if request.path == "/healthz":
         return connection.respond(http.HTTPStatus.OK, "OK\n")
     # Continue with the normal request handling.

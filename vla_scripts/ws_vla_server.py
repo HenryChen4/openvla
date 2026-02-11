@@ -1,21 +1,25 @@
-import enum
 import logging
-import socket 
+import socket
+from dataclasses import dataclass
+
+import tyro
 import vla_scripts.ws_server_wrapper as ws_server_wrapper
 
-from pathlib import Path
-from typing import Any, Dict, Optional, Union
-
-from dataclasses import dataclass
 
 @dataclass
 class LiberoOpenVLACfg:
     # MODEL SETTINGS
-    model_family: str = "openvla"                    # Model family
-    pretrained_checkpoint: Union[str, Path] = ""     # Pretrained checkpoint path
-    load_in_8bit: bool = False                       # (For OpenVLA only) Load with 8-bit quantization
-    load_in_4bit: bool = False                       # (For OpenVLA only) Load with 4-bit quantization
-    pretrained_checkpoint: str = "openvla/openvla-7b-finetuned-libero-spatial"
+    model_family: str = "openvla"  # Model family
+    load_in_8bit: bool = (
+        False  # (For OpenVLA only) Load with 8-bit quantization
+    )
+    load_in_4bit: bool = (
+        False  # (For OpenVLA only) Load with 4-bit quantization
+    )
+    # pretrained_checkpoint: str = "openvla/openvla-7b-finetuned-libero-spatial"
+    pretrained_checkpoint: str = (
+        "/home/shihanzh/vlarl/MODEL/openvla-7b-finetuned-libero-spatial"
+    )
     attn_implementation: str = "flash_attention_2"
     unnorm_key: str = "libero_spatial"
 
@@ -24,11 +28,14 @@ class LiberoOpenVLACfg:
     port: int = 8000
 
     # LIBERO DATA SETTINGS
-    center_crop: bool = True 
-    n_samples: int = 1 # number of actions to sample (keep at 1 following paper)
+    center_crop: bool = True
+    n_samples: int = (
+        1  # number of actions to sample (keep at 1 following paper)
+    )
     output_attentions: bool = False
     output_logits: bool = False
-    output_hidden_states: bool = True 
+    output_hidden_states: bool = True
+
 
 def main(server_cfg: LiberoOpenVLACfg) -> None:
     hostname = socket.gethostname()
@@ -43,8 +50,7 @@ def main(server_cfg: LiberoOpenVLACfg) -> None:
     )
     server.serve_forever()
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, force=True)
-    
-    server_cfg = LiberoOpenVLACfg()
-    main(server_cfg)
+    main(tyro.cli(LiberoOpenVLACfg))
